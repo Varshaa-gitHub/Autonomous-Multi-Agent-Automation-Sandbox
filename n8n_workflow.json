@@ -1,0 +1,338 @@
+{
+  "name": "Local Multi-Agent Supervisor-Critic Loop",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1d8eb6e7-7d72-46be-86eb-f698a6bb5c0e",
+      "name": "On Chat Message",
+      "type": "n8n-nodes-base.chatTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput || $json.feedback_prompt }}",
+        "options": {
+          "systemMessage": "You are the Lead Architectural Supervisor. When a user submits a goal, break it down into explicit logical sub-steps. Call your attached sub-tools (query_knowledge_base, data_cruncher, sheets_tool) to pull data, analyze metrics, or verify structural alignments. Once you collect your tool variables, compile them into a beautifully formatted Markdown report. \n\n⚠️ IMPORTANT: To pass the strict quality validator checklist, your final output report MUST explicitly contain a section headed 'Weekly Performance' and be detailed, rich, and comprehensive (at least 150 characters long). If a tool fails, adapt your parameters and retry. If a validator error prompt is received, analyze its complaints, correct your previous output, and re-issue the revised report."
+        }
+      },
+      "id": "2e7df6f5-56fa-4b82-bd6b-4e08bfca2de0",
+      "name": "Supervisor / Planner Agent",
+      "type": "n8n-nodes-base.agent",
+      "typeVersion": 1,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.5
+        }
+      },
+      "id": "3a8c3d9a-dcb3-4bc1-90c1-3f41e57c6b41",
+      "name": "OpenAI Chat Model",
+      "type": "n8n-nodes-base.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        420,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "contextKey": "chat_history"
+      },
+      "id": "4b5e6d7c-8e9f-4a0b-bc1d-2e3f4a5b6c7d",
+      "name": "Window Buffer Memory",
+      "type": "n8n-nodes-base.memoryBufferWindow",
+      "typeVersion": 1,
+      "position": [
+        540,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "name": "query_knowledge_base",
+        "description": "Accesses Supabase corporate vector store to retrieve formatting manuals, guidelines, and context templates."
+      },
+      "id": "5f6e7d8c-9b0a-4c1d-2e3f-4a5b6c7d8e9f",
+      "name": "Supabase Vector Store Tool",
+      "type": "n8n-nodes-base.toolSupabase",
+      "typeVersion": 1,
+      "position": [
+        260,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "name": "data_cruncher",
+        "description": "Autonomously compiles and runs local Python analytics scripts to calculate sums, matrices, or clean up Excel rows."
+      },
+      "id": "6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d",
+      "name": "Python Data Tool",
+      "type": "n8n-nodes-base.toolCustom",
+      "typeVersion": 1,
+      "position": [
+        340,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Access the generated output from the agent block\nconst items = $input.all();\nif (items.length === 0) return [];\n\nconst item = items[0];\nconst reportText = item.json.output || item.json.text || \"\";\nconst context = item.json.context || {};\nlet currentLoops = context.critic_loops_run || 0;\n\n// Enforce specific validation rules (must contain 'Weekly Performance' and be >= 150 chars)\nconst hasMarker = reportText.toLowerCase().includes(\"weekly performance\");\nconst isLongEnough = reportText.length >= 150;\n\nif (!hasMarker || !isLongEnough) {\n    currentLoops += 1;\n    \n    // Hard break if the agent falls into an infinite loop to prevent API burn\n    if (currentLoops >= 4) {\n        return [{\n            json: {\n                passed: false,\n                fatalError: true,\n                msg: \"Max validation attempts reached without passing quality checks. Halting pipeline.\",\n                critic_loops_run: currentLoops,\n                output: reportText\n            }\n        }];\n    }\n    \n    let failureReason = \"\";\n    if (!hasMarker) failureReason += \"Missing required 'Weekly Performance' heading/section. \";\n    if (!isLongEnough) failureReason += `Output is too short (${reportText.length}/150 required characters). `;\n    \n    return [{\n        json: {\n            passed: false,\n            critic_loops_run: currentLoops,\n            feedback_prompt: `CRITIC FAILURE (Attempt ${currentLoops}/4): Your report was rejected by the Quality Critic. Reason: ${failureReason} Please adjust your parameters, expand on the details, ensure you include the 'Weekly Performance' section, and re-output the full document.`\n        }\n    }];\n}\n\nreturn [{\n    json: {\n        passed: true,\n        critic_loops_run: currentLoops,\n        validated_report: reportText\n    }\n}];"
+      },
+      "id": "7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e",
+      "name": "Critic / Output Validator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.passed }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "8c9d0e1f-2a3b-4c5d-6e7f-8a9b0c1d2e3f",
+      "name": "Did output pass validation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "feedback_prompt",
+              "value": "={{ $json.feedback_prompt }}"
+            }
+          ],
+          "number": [
+            {
+              "name": "context.critic_loops_run",
+              "value": "={{ $json.critic_loops_run }}"
+            }
+          ]
+        }
+      },
+      "id": "9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a",
+      "name": "Feedback Loop Mapper",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        880,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "table": "agent_deliverables_dashboard",
+        "dataToSend": "define",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "user_request",
+              "fieldValue": "={{ $('On Chat Message').item.json.chatInput }}"
+            },
+            {
+              "fieldId": "execution_status",
+              "fieldValue": "Success"
+            },
+            {
+              "fieldId": "critic_loops_run",
+              "fieldValue": "={{ $json.critic_loops_run }}"
+            },
+            {
+              "fieldId": "deliverable_outcome",
+              "fieldValue": "Successfully compiled validated performance document matching structural criteria."
+            },
+            {
+              "fieldId": "detailed_audit_logs",
+              "fieldValue": "={{ JSON.stringify($('Critic / Output Validator').item.json) }}"
+            }
+          ]
+        }
+      },
+      "id": "a0b1c2d3-e4f5-6a7b-8c9d-0e1f2a3b4c5d",
+      "name": "Supabase Dashboard Update",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "delivery_status",
+              "value": "Dispatched"
+            },
+            {
+              "name": "channel",
+              "value": "Gmail & Slack"
+            },
+            {
+              "name": "message",
+              "value": "Weekly performance report successfully validated by Critic and delivered."
+            }
+          ]
+        }
+      },
+      "id": "b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e",
+      "name": "Gmail / Slack Dispatcher",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1440,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "On Chat Message": {
+      "main": [
+        [
+          {
+            "node": "Supervisor / Planner Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supervisor / Planner Agent": {
+      "main": [
+        [
+          {
+            "node": "Critic / Output Validator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Supervisor / Planner Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window Buffer Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Supervisor / Planner Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Vector Store Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Supervisor / Planner Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Python Data Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Supervisor / Planner Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Critic / Output Validator": {
+      "main": [
+        [
+          {
+            "node": "Did output pass validation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Did output pass validation?": {
+      "main": [
+        [
+          {
+            "node": "Supabase Dashboard Update",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Feedback Loop Mapper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Feedback Loop Mapper": {
+      "main": [
+        [
+          {
+            "node": "Supervisor / Planner Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Dashboard Update": {
+      "main": [
+        [
+          {
+            "node": "Gmail / Slack Dispatcher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}
